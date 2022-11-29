@@ -89,10 +89,10 @@ export type PuppeteerScreenRecorderOptions = {
   /**
    * @name backgroundColor
    * @member PuppeteerScreenRecorderOptions
-   * @description Specify the backgroundColor of the video. Default value is 0xA39DA18C.
-   * @default 0xA39DA18C
+   * @description Specify the backgroundColor of the video. Default value is '#A39DA18C'.
+   * @default #A39DA18C'
    */
-   readonly backgroundColor?: number;
+   readonly backgroundColor?: string;
 
   /**
    * @name videoCodec
