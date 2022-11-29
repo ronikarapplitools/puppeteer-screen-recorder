@@ -78,6 +78,8 @@ export type PuppeteerScreenRecorderOptions = {
    */
   readonly aspectRatio?: '3:2' | '4:3' | '16:9';
 
+  readonly saveFrameSize?: boolean;
+
   /**
    * @name videoCodec
    * @member PuppeteerScreenRecorderOptions

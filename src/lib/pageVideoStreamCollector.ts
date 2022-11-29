@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 
+import Jimp from 'jimp'
 import { CDPSession, Page } from 'puppeteer';
 
 import { PuppeteerScreenRecorderOptions } from './pageVideoStreamTypes';
@@ -101,12 +102,28 @@ export class pageVideoStreamCollector extends EventEmitter {
             return resolve();
           }
 
+          let blob
+
+          if (this.options.saveFrameSize){
+            const image = await (await Jimp.read(Buffer.from(data, 'base64')))
+            
+            if (metadata.deviceWidth && metadata.deviceHeight){
+              image.resize(metadata.deviceWidth, metadata.deviceHeight)
+            }
+            if (this.options.saveFrameSize){
+              const backgroundImage = new Jimp(this.options.videoFrame.width, this.options.videoFrame.width, 0xFFFFFFFF)
+              blob = await backgroundImage.blit(image, 0, 0).getBufferAsync(Jimp.MIME_JPEG)
+             }
+          }else{
+            blob = Buffer.from(data, 'base64')
+          }
+
           const ackPromise = session.send('Page.screencastFrameAck', {
             sessionId: sessionId,
           });
 
           this.emit('pageScreenFrame', {
-            blob: Buffer.from(data, 'base64'),
+            blob,
             timestamp: metadata.timestamp,
           });
 
