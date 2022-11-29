@@ -23,7 +23,8 @@ const defaultPuppeteerScreenRecorderOptions: PuppeteerScreenRecorderOptions = {
     height: null,
   },
   aspectRatio: '4:3',
-  saveFrameSize: false
+  saveFrameSize: false,
+  backgroundColor: 0xA39DA18C
 };
 
 /**

@@ -111,7 +111,7 @@ export class pageVideoStreamCollector extends EventEmitter {
               image.resize(metadata.deviceWidth, metadata.deviceHeight)
             }
             if (this.options.saveFrameSize){
-              const backgroundImage = new Jimp(this.options.videoFrame.width, this.options.videoFrame.width, 0xFFFFFFFF)
+              const backgroundImage = new Jimp(this.options.videoFrame.width, this.options.videoFrame.width, this.options.backgroundColor)
               blob = await backgroundImage.blit(image, 0, 0).getBufferAsync(Jimp.MIME_JPEG)
              }
           }else{

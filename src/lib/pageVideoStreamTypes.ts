@@ -78,7 +78,21 @@ export type PuppeteerScreenRecorderOptions = {
    */
   readonly aspectRatio?: '3:2' | '4:3' | '16:9';
 
+  /**
+   * @name saveFrameSize
+   * @member PuppeteerScreenRecorderOptions
+   * @description Boolean value. Should the recorder save the original frame size in the video. Default value is false.
+   * @default false
+   */
   readonly saveFrameSize?: boolean;
+
+  /**
+   * @name backgroundColor
+   * @member PuppeteerScreenRecorderOptions
+   * @description Specify the backgroundColor of the video. Default value is 0xA39DA18C.
+   * @default 0xA39DA18C
+   */
+   readonly backgroundColor?: number;
 
   /**
    * @name videoCodec
