@@ -19,7 +19,7 @@ export enum VIDEO_WRITE_STATUS {
   readonly data: string
 };
 
-export type pageScreenFrame = {
+export type PageScreenFrame = {
   readonly blob: Buffer;
   readonly timestamp: number;
   readonly duration?: number;

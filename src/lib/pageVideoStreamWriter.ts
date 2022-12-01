@@ -8,7 +8,7 @@ import sharp from 'sharp'
 
 
 import {
-  pageScreenFrame,
+  PageScreenFrame,
   RawFrame,
   SupportedFileFormats,
   VIDEO_WRITE_STATUS,
@@ -29,49 +29,96 @@ const SUPPORTED_FILE_FORMATS = [
  * @ignore
  */
 export default class PageVideoStreamWriter extends EventEmitter {
-  private readonly screenLimit = 40;
-  private screenCastFrames = [];
+  private readonly _screenLimit = 40;
+  private _screenCastFrames = [];
   public duration = '00:00:00:00';
 
-  private status = VIDEO_WRITE_STATUS.NOT_STARTED;
-  private options: VideoOptions;
+  private _status = VIDEO_WRITE_STATUS.NOT_STARTED;
+  private _options: VideoOptions;
 
-  private videoMediatorStream: PassThrough = new PassThrough();
-  private writerPromise: Promise<boolean>;
+  private _videoMediatorStream: PassThrough = new PassThrough();
+  private _writerPromise: Promise<boolean>;
 
   constructor(destinationSource: string | Writable, options?: VideoOptions) {
     super();
 
     if (options) {
-      this.options = options;
+      this._options = options;
     }
 
-    const isWritable = this.isWritableStream(destinationSource);
-    this.configureFFmPegPath();
+    const isWritable = this._isWritableStream(destinationSource);
+    this._configureFFmPegPath();
     if (isWritable) {
-      this.configureVideoWritableStream(destinationSource as Writable);
+      this._configureVideoWritableStream(destinationSource as Writable);
     } else {
-      this.configureVideoFile(destinationSource as string);
+      this._configureVideoFile(destinationSource as string);
     }
   }
 
-  private get videoFrameSize(): string {
-    const { width, height } = this.options.videoFrame;
+  private get _videoFrameSize(): string {
+    const { width, height } = this._options.videoFrame;
 
     return width !== null && height !== null ? `${width}x${height}` : '100%';
   }
 
-  private get autopad(): { activation: boolean; color?: string } {
-    const autopad = this.options.autopad;
+  private get _autopad(): { activation: boolean; color?: string } {
+    const autopad = this._options.autopad;
 
     return !autopad
       ? { activation: false }
       : { activation: true, color: autopad.color };
   }
 
-  private getFfmpegPath(): string | null {
-    if (this.options.ffmpeg_Path) {
-      return this.options.ffmpeg_Path;
+  public async insert({data, metadata}: RawFrame): Promise<void> {
+    const frame = await this._createPageScreenFrame({data,metadata})
+
+     // reduce the queue into half when it is full
+    if (this._screenCastFrames.length === this._screenLimit) {
+      const numberOfFramesToSplice = Math.floor(this._screenLimit / 2);
+      const framesToProcess = this._screenCastFrames.splice(
+        0,
+        numberOfFramesToSplice
+      );
+      this._processFrameBeforeWrite(framesToProcess, this._screenCastFrames[0].timestamp);
+    }
+
+    const insertionIndex = this._findSlot(frame.timestamp);
+
+    if (insertionIndex === this._screenCastFrames.length) {
+      this._screenCastFrames.push(frame);
+    } else {
+      this._screenCastFrames.splice(insertionIndex, 0, frame);
+    }
+  }
+
+  public write(data: Buffer, durationSeconds = 1): void {
+    this._status = VIDEO_WRITE_STATUS.IN_PROGRESS;
+
+    const NUMBER_OF_FPS = Math.max(
+      Math.floor(durationSeconds * this._options.fps),
+      1
+    );
+
+    for (let i = 0; i < NUMBER_OF_FPS; i++) {
+      this._videoMediatorStream.write(data);
+    }
+  }
+
+  public stop(stoppedTime = Date.now() / 1000): Promise<boolean> {
+    if (this._status === VIDEO_WRITE_STATUS.COMPLETED) {
+      return this._writerPromise;
+    }
+
+    this._drainFrames(stoppedTime);
+
+    this._videoMediatorStream.end();
+    this._status = VIDEO_WRITE_STATUS.COMPLETED;
+    return this._writerPromise;
+  }
+
+  private _getFfmpegPath(): string | null {
+    if (this._options.ffmpeg_Path) {
+      return this._options.ffmpeg_Path;
     }
 
     try {
@@ -86,15 +133,15 @@ export default class PageVideoStreamWriter extends EventEmitter {
     }
   }
 
-  private getDestinationPathExtension(destinationFile): SupportedFileFormats {
+  private _getDestinationPathExtension(destinationFile): SupportedFileFormats {
     const fileExtension = extname(destinationFile);
     return fileExtension.includes('.')
       ? (fileExtension.replace('.', '') as SupportedFileFormats)
       : (fileExtension as SupportedFileFormats);
   }
 
-  private configureFFmPegPath(): void {
-    const ffmpegPath = this.getFfmpegPath();
+  private _configureFFmPegPath(): void {
+    const ffmpegPath = this._getFfmpegPath();
 
     if (!ffmpegPath) {
       throw new Error(
@@ -105,7 +152,7 @@ export default class PageVideoStreamWriter extends EventEmitter {
     setFfmpegPath(ffmpegPath);
   }
 
-  private isWritableStream(destinationSource: string | Writable): boolean {
+  private _isWritableStream(destinationSource: string | Writable): boolean {
     if (destinationSource && typeof destinationSource !== 'string') {
       if (
         !(destinationSource instanceof Writable) ||
@@ -119,19 +166,19 @@ export default class PageVideoStreamWriter extends EventEmitter {
     return false;
   }
 
-  private configureVideoFile(destinationPath: string): void {
-    const fileExt = this.getDestinationPathExtension(destinationPath);
+  private _configureVideoFile(destinationPath: string): void {
+    const fileExt = this._getDestinationPathExtension(destinationPath);
 
     if (!SUPPORTED_FILE_FORMATS.includes(fileExt)) {
       throw new Error('File format is not supported');
     }
 
-    this.writerPromise = new Promise((resolve) => {
-      const outputStream = this.getDestinationStream();
+    this._writerPromise = new Promise((resolve) => {
+      const outputStream = this._getDestinationStream();
 
       outputStream
         .on('error', (e) => {
-          this.handleWriteStreamError(e.message);
+          this._handleWriteStreamError(e.message);
           resolve(false);
         })
         .on('end', () => resolve(true))
@@ -140,15 +187,15 @@ export default class PageVideoStreamWriter extends EventEmitter {
       if (fileExt == SupportedFileFormats.WEBM) {
         outputStream
           .videoCodec('libvpx')
-          .videoBitrate(this.options.videoBitrate || 1000, true)
+          .videoBitrate(this._options.videoBitrate || 1000, true)
           .outputOptions('-flags', '+global_header', '-psnr');
       }
     });
   }
 
-  private configureVideoWritableStream(writableStream: Writable) {
-    this.writerPromise = new Promise((resolve) => {
-      const outputStream = this.getDestinationStream();
+  private _configureVideoWritableStream(writableStream: Writable) {
+    this._writerPromise = new Promise((resolve) => {
+      const outputStream = this._getDestinationStream();
 
       outputStream
         .on('error', (e) => {
@@ -168,41 +215,41 @@ export default class PageVideoStreamWriter extends EventEmitter {
     });
   }
 
-  private getDestinationStream(): ffmpeg {
+  private _getDestinationStream(): ffmpeg {
     const cpu = Math.max(1, os.cpus().length - 1);
     const outputStream = ffmpeg({
-      source: this.videoMediatorStream,
+      source: this._videoMediatorStream,
       priority: 20,
     })
-      .videoCodec(this.options.videoCodec || 'libx264')
-      .size(this.videoFrameSize)
-      .aspect(this.options.aspectRatio || '4:3')
-      .autopad(this.autopad.activation, this.autopad?.color)
+      .videoCodec(this._options.videoCodec || 'libx264')
+      .size(this._videoFrameSize)
+      .aspect(this._options.aspectRatio || '4:3')
+      .autopad(this._autopad.activation, this._autopad?.color)
       .inputFormat('image2pipe')
-      .inputFPS(this.options.fps)
-      .outputOptions(`-crf ${this.options.videoCrf ?? 23}`)
-      .outputOptions(`-preset ${this.options.videoPreset || 'ultrafast'}`)
-      .outputOptions(`-pix_fmt ${this.options.videoPixelFormat || 'yuv420p'}`)
-      .outputOptions(`-minrate ${this.options.videoBitrate || 1000}`)
-      .outputOptions(`-maxrate ${this.options.videoBitrate || 1000}`)
+      .inputFPS(this._options.fps)
+      .outputOptions(`-crf ${this._options.videoCrf ?? 23}`)
+      .outputOptions(`-preset ${this._options.videoPreset || 'ultrafast'}`)
+      .outputOptions(`-pix_fmt ${this._options.videoPixelFormat || 'yuv420p'}`)
+      .outputOptions(`-minrate ${this._options.videoBitrate || 1000}`)
+      .outputOptions(`-maxrate ${this._options.videoBitrate || 1000}`)
       .outputOptions('-framerate 1')
       .outputOptions(`-threads ${cpu}`)
       .on('progress', (progressDetails) => {
         this.duration = progressDetails.timemark;
       });
 
-    if (this.options.recordDurationLimit) {
-      outputStream.duration(this.options.recordDurationLimit);
+    if (this._options.recordDurationLimit) {
+      outputStream.duration(this._options.recordDurationLimit);
     }
 
     return outputStream;
   }
 
-  private handleWriteStreamError(errorMessage): void {
+  private _handleWriteStreamError(errorMessage): void {
     this.emit('videoStreamWriterError', errorMessage);
 
     if (
-      this.status !== VIDEO_WRITE_STATUS.IN_PROGRESS &&
+      this._status !== VIDEO_WRITE_STATUS.IN_PROGRESS &&
       errorMessage.includes('pipe:0: End of file')
     ) {
       return;
@@ -212,16 +259,16 @@ export default class PageVideoStreamWriter extends EventEmitter {
     );
   }
 
-  private findSlot(timestamp: number): number {
-    if (this.screenCastFrames.length === 0) {
+  private _findSlot(timestamp: number): number {
+    if (this._screenCastFrames.length === 0) {
       return 0;
     }
 
     let i: number;
-    let frame: pageScreenFrame;
+    let frame: PageScreenFrame;
 
-    for (i = this.screenCastFrames.length - 1; i >= 0; i--) {
-      frame = this.screenCastFrames[i];
+    for (i = this._screenCastFrames.length - 1; i >= 0; i--) {
+      frame = this._screenCastFrames[i];
 
       if (timestamp > frame.timestamp) {
         break;
@@ -231,30 +278,8 @@ export default class PageVideoStreamWriter extends EventEmitter {
     return i + 1;
   }
 
-   public async insert({data, metadata}: RawFrame): Promise<void> {
-     const frame = await this.createPageScreenFrame({data,metadata})
-     
-     // reduce the queue into half when it is full
-    if (this.screenCastFrames.length === this.screenLimit) {
-      const numberOfFramesToSplice = Math.floor(this.screenLimit / 2);
-      const framesToProcess = this.screenCastFrames.splice(
-        0,
-        numberOfFramesToSplice
-      );
-      this.processFrameBeforeWrite(framesToProcess, this.screenCastFrames[0].timestamp);
-    }
-
-    const insertionIndex = this.findSlot(frame.timestamp);
-
-    if (insertionIndex === this.screenCastFrames.length) {
-      this.screenCastFrames.push(frame);
-    } else {
-      this.screenCastFrames.splice(insertionIndex, 0, frame);
-    }
-  }
-
-  private trimFrame(fameList: pageScreenFrame[], chunckEndTime: number): pageScreenFrame[] {
-    return fameList.map((currentFrame: pageScreenFrame, index: number) => {
+  private _trimFrame(fameList: PageScreenFrame[], chunckEndTime: number): PageScreenFrame[] {
+    return fameList.map((currentFrame: PageScreenFrame, index: number) => {
       const endTime = (index !== fameList.length-1) ? fameList[index+1].timestamp : chunckEndTime;
       const duration = endTime - currentFrame.timestamp; 
         
@@ -265,29 +290,29 @@ export default class PageVideoStreamWriter extends EventEmitter {
     });
   }
 
-  private processFrameBeforeWrite(frames: pageScreenFrame[], chunckEndTime: number): void {
-    const processedFrames = this.trimFrame(frames, chunckEndTime);
+  private _processFrameBeforeWrite(frames: PageScreenFrame[], chunckEndTime: number): void {
+    const processedFrames = this._trimFrame(frames, chunckEndTime);
 
     processedFrames.forEach(({ blob, duration }) => {
       this.write(blob, duration);
     });
   }
 
-  private async createPageScreenFrame({data, metadata}: RawFrame){
+  private async _createPageScreenFrame({data, metadata}: RawFrame){
     let blob
     const {deviceHeight, deviceWidth, timestamp} = metadata;
 
-    if (this.options.saveFrameSize){
+    if (this._options.saveFrameSize){
       const image = sharp(Buffer.from(data, 'base64'));
       if (deviceWidth && deviceHeight){
         image.resize({ width:metadata.deviceWidth, height:metadata.deviceHeight})
-        .extract({top:0, left:0, height: Math.min(this.options.videoFrame.height, deviceHeight), width: Math.min(this.options.videoFrame.width, deviceWidth)})
+        .extract({top:0, left:0, height: Math.min(this._options.videoFrame.height, deviceHeight), width: Math.min(this._options.videoFrame.width, deviceWidth)})
         .extend({
           top: 0,
-          bottom: Math.max(this.options.videoFrame.height - deviceHeight,0),
+          bottom: Math.max(this._options.videoFrame.height - deviceHeight,0),
           left: 0,
-          right: Math.max(this.options.videoFrame.width - deviceWidth ,0),
-          background: this.options.backgroundColor
+          right: Math.max(this._options.videoFrame.width - deviceWidth ,0),
+          background: this._options.backgroundColor
          })
       }
       
@@ -302,33 +327,8 @@ export default class PageVideoStreamWriter extends EventEmitter {
     }
   }
 
-  public write(data: Buffer, durationSeconds = 1): void {
-    this.status = VIDEO_WRITE_STATUS.IN_PROGRESS;
-
-    const NUMBER_OF_FPS = Math.max(
-      Math.floor(durationSeconds * this.options.fps),
-      1
-    );
-
-    for (let i = 0; i < NUMBER_OF_FPS; i++) {
-      this.videoMediatorStream.write(data);
-    }
-  }
-
-  private drainFrames(stoppedTime: number): void {
-    this.processFrameBeforeWrite(this.screenCastFrames, stoppedTime);
-    this.screenCastFrames = [];
-  }
-
-  public stop(stoppedTime = Date.now() / 1000): Promise<boolean> {
-    if (this.status === VIDEO_WRITE_STATUS.COMPLETED) {
-      return this.writerPromise;
-    }
-
-    this.drainFrames(stoppedTime);
-
-    this.videoMediatorStream.end();
-    this.status = VIDEO_WRITE_STATUS.COMPLETED;
-    return this.writerPromise;
+  private _drainFrames(stoppedTime: number): void {
+    this._processFrameBeforeWrite(this._screenCastFrames, stoppedTime);
+    this._screenCastFrames = [];
   }
 }

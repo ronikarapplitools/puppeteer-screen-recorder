@@ -43,39 +43,107 @@ const defaultPuppeteerScreenRecorderOptions: PuppeteerScreenRecorderOptions = {
  * ```
  */
 export class PuppeteerScreenRecorder {
-  private page: Page;
-  private options: PuppeteerScreenRecorderOptions;
-  private streamReader: pageVideoStreamCollector;
-  private streamWriter: PageVideoStreamWriter;
-  private isScreenCaptureEnded: boolean | null = null;
+  private _page: Page;
+  private _options: PuppeteerScreenRecorderOptions;
+  private _streamReader: pageVideoStreamCollector;
+  private _streamWriter: PageVideoStreamWriter;
+  private _isScreenCaptureEnded: boolean | null = null;
 
   constructor(page: Page, options = {}) {
-    this.options = Object.assign(
+    this._options = Object.assign(
       {},
       defaultPuppeteerScreenRecorderOptions,
       options
     );
-    this.streamReader = new pageVideoStreamCollector(page, this.options);
-    this.page = page;
+    this._streamReader = new pageVideoStreamCollector(page, this._options);
+    this._page = page;
+  }
+
+  /**
+   * @public
+   * @method getRecordDuration
+   * @description return the total duration of the video recorded,
+   *  1. if this method is called before calling the stop method, it would be return the time till it has recorded.
+   *  2. if this method is called after stop method, it would give the total time for recording
+   * @returns total duration of video
+   */
+  public getRecordDuration(): string {
+    if (!this._streamWriter) {
+      return '00:00:00:00';
+    }
+    return this._streamWriter.duration;
+  }
+
+  /**
+   *
+   * @public
+   * @method start
+   * @param savePath accepts a path string to store the video
+   * @description Start the video capturing session
+   * @returns PuppeteerScreenRecorder
+   * @example
+   * ```
+   *  const savePath = './test/demo.mp4'; //.mp4 is required
+   *  await recorder.start(savePath);
+   * ```
+   */
+  public async start(savePath: string): Promise<PuppeteerScreenRecorder> {
+    await this._ensureDirectoryExist(dirname(savePath));
+
+    this._streamWriter = new PageVideoStreamWriter(savePath, this._options);
+    return this._startStreamReader();
+  }
+
+  /**
+   *
+   * @public
+   * @method startStream
+   * @description Start the video capturing session in a stream
+   * @returns {PuppeteerScreenRecorder}
+   * @example
+   * ```
+   *  const stream = new PassThrough();
+   *  await recorder.startStream(stream);
+   * ```
+   */
+  public async startStream(stream: Writable): Promise<PuppeteerScreenRecorder> {
+    this._streamWriter = new PageVideoStreamWriter(stream, this._options);
+    return this._startStreamReader();
+  }
+
+  /**
+   * @public
+   * @method stop
+   * @description stop the video capturing session
+   * @returns indicate whether stop is completed correct or not, if true without any error else false.
+   */
+  public async stop(): Promise<boolean> {
+    if (this._isScreenCaptureEnded !== null) {
+      return this._isScreenCaptureEnded;
+    }
+
+    await this._streamReader.stop();
+    this._isScreenCaptureEnded = await this._streamWriter.stop();
+    return this._isScreenCaptureEnded;
   }
 
   /**
    * @ignore
    */
-  private setupListeners(): void {
-    this.page.once('close', async () => await this.stop());
+   private _setupListeners(): void {
+    this._page.once('close', async () => await this.stop());
 
-    this.streamReader.on('pageScreenFrame', (rawFrame) => {
-      this.streamWriter.insert(rawFrame);
+    this._streamReader.on('pageScreenFrame', (rawFrame) => {
+      this._streamWriter.insert(rawFrame);
     });
 
-    this.streamWriter.once('videoStreamWriterError', () => this.stop());
+    this._streamWriter.once('videoStreamWriterError', () => this.stop());
   }
 
   /**
    * @ignore
    */
-  private async ensureDirectoryExist(dirPath) {
+  private async _ensureDirectoryExist(dirPath) {
     return new Promise((resolve, reject) => {
       try {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -93,78 +161,10 @@ export class PuppeteerScreenRecorder {
    * @description start listening for video stream from the page.
    * @returns PuppeteerScreenRecorder
    */
-  private async startStreamReader(): Promise<PuppeteerScreenRecorder> {
-    this.setupListeners();
+  private async _startStreamReader(): Promise<PuppeteerScreenRecorder> {
+    this._setupListeners();
 
-    await this.streamReader.start();
+    await this._streamReader.start();
     return this;
-  }
-
-  /**
-   * @public
-   * @method getRecordDuration
-   * @description return the total duration of the video recorded,
-   *  1. if this method is called before calling the stop method, it would be return the time till it has recorded.
-   *  2. if this method is called after stop method, it would give the total time for recording
-   * @returns total duration of video
-   */
-  public getRecordDuration(): string {
-    if (!this.streamWriter) {
-      return '00:00:00:00';
-    }
-    return this.streamWriter.duration;
-  }
-
-  /**
-   *
-   * @public
-   * @method start
-   * @param savePath accepts a path string to store the video
-   * @description Start the video capturing session
-   * @returns PuppeteerScreenRecorder
-   * @example
-   * ```
-   *  const savePath = './test/demo.mp4'; //.mp4 is required
-   *  await recorder.start(savePath);
-   * ```
-   */
-  public async start(savePath: string): Promise<PuppeteerScreenRecorder> {
-    await this.ensureDirectoryExist(dirname(savePath));
-
-    this.streamWriter = new PageVideoStreamWriter(savePath, this.options);
-    return this.startStreamReader();
-  }
-
-  /**
-   *
-   * @public
-   * @method startStream
-   * @description Start the video capturing session in a stream
-   * @returns {PuppeteerScreenRecorder}
-   * @example
-   * ```
-   *  const stream = new PassThrough();
-   *  await recorder.startStream(stream);
-   * ```
-   */
-  public async startStream(stream: Writable): Promise<PuppeteerScreenRecorder> {
-    this.streamWriter = new PageVideoStreamWriter(stream, this.options);
-    return this.startStreamReader();
-  }
-
-  /**
-   * @public
-   * @method stop
-   * @description stop the video capturing session
-   * @returns indicate whether stop is completed correct or not, if true without any error else false.
-   */
-  public async stop(): Promise<boolean> {
-    if (this.isScreenCaptureEnded !== null) {
-      return this.isScreenCaptureEnded;
-    }
-
-    await this.streamReader.stop();
-    this.isScreenCaptureEnded = await this.streamWriter.stop();
-    return this.isScreenCaptureEnded;
   }
 }

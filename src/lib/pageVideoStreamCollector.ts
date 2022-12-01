@@ -8,24 +8,60 @@ import { PuppeteerScreenRecorderOptions } from './pageVideoStreamTypes';
  * @ignore
  */
 export class pageVideoStreamCollector extends EventEmitter {
-  private page: Page;
-  private options: PuppeteerScreenRecorderOptions;
-  private sessionsStack: [CDPSession?] = [];
-  private isStreamingEnded = false;
+  private _page: Page;
+  private _options: PuppeteerScreenRecorderOptions;
+  private _sessionsStack: [CDPSession?] = [];
+  private _isStreamingEnded = false;
 
-  private isFrameAckReceived: Promise<void>;
+  private _isFrameAckReceived: Promise<void>;
 
   constructor(page: Page, options: PuppeteerScreenRecorderOptions) {
     super();
-    this.page = page;
-    this.options = options;
+    this._page = page;
+    this._options = options;
   }
 
-  private get shouldFollowPopupWindow(): boolean {
-    return this.options.followNewTab;
+  private get _shouldFollowPopupWindow(): boolean {
+    return this._options.followNewTab;
   }
 
-  private async getPageSession(page: Page): Promise<CDPSession | null> {
+  public async start(): Promise<void> {
+    await this._startSession(this._page);
+    this._page.once('close', async () => await this._endSession());
+
+    if (this._shouldFollowPopupWindow) {
+      this._addListenerOnTabOpens(this._page);
+    }
+  }
+
+  public async stop(): Promise<boolean> {
+    if (this._isStreamingEnded) {
+      return this._isStreamingEnded;
+    }
+
+    if (this._shouldFollowPopupWindow) {
+      this._removeListenerOnTabClose(this._page);
+    }
+
+    await Promise.race([
+      this._isFrameAckReceived,
+      new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
+
+    this._isStreamingEnded = true;
+
+    try {
+      for (const currentSession of this._sessionsStack) {
+        await currentSession.detach();
+      }
+    } catch (e) {
+      console.warn('Error detaching session', e.message);
+    }
+
+    return true;
+  }
+
+  private async _getPageSession(page: Page): Promise<CDPSession | null> {
     try {
       const context = page.target();
       return await context.createCDPSession();
@@ -35,69 +71,69 @@ export class pageVideoStreamCollector extends EventEmitter {
     }
   }
 
-  private getCurrentSession(): CDPSession | null {
-    return this.sessionsStack[this.sessionsStack.length - 1];
+  private _getCurrentSession(): CDPSession | null {
+    return this._sessionsStack[this._sessionsStack.length - 1];
   }
 
-  private addListenerOnTabOpens(page: Page): void {
-    page.on('popup', (newPage) => this.registerTabListener(newPage));
+  private _addListenerOnTabOpens(page: Page): void {
+    page.on('popup', (newPage) => this._registerTabListener(newPage));
   }
 
-  private removeListenerOnTabClose(page: Page): void {
-    page.off('popup', (newPage) => this.registerTabListener(newPage));
+  private _removeListenerOnTabClose(page: Page): void {
+    page.off('popup', (newPage) => this._registerTabListener(newPage));
   }
 
-  private async registerTabListener(newPage: Page): Promise<void> {
-    await this.startSession(newPage);
-    newPage.once('close', async () => await this.endSession());
+  private async _registerTabListener(newPage: Page): Promise<void> {
+    await this._startSession(newPage);
+    newPage.once('close', async () => await this._endSession());
   }
 
-  private async startScreenCast(shouldDeleteSessionOnFailure = false) {
-    const currentSession = this.getCurrentSession();
-    const quality = Number.isNaN(this.options.quality)
+  private async _startScreenCast(shouldDeleteSessionOnFailure = false) {
+    const currentSession = this._getCurrentSession();
+    const quality = Number.isNaN(this._options.quality)
       ? 100
-      : Math.max(Math.min(this.options.quality, 100), 0);
+      : Math.max(Math.min(this._options.quality, 100), 0);
     try {
       await currentSession.send('Animation.setPlaybackRate', {
         playbackRate: 1,
       });
       await currentSession.send('Page.startScreencast', {
         everyNthFrame: 1,
-        format: this.options.format || 'jpeg',
+        format: this._options.format || 'jpeg',
         quality: quality,
       });
     } catch (e) {
       if (shouldDeleteSessionOnFailure) {
-        this.endSession();
+        this._endSession();
       }
     }
   }
 
-  private async stopScreenCast() {
-    const currentSession = this.getCurrentSession();
+  private async _stopScreenCast() {
+    const currentSession = this._getCurrentSession();
     if (!currentSession) {
       return;
     }
     await currentSession.send('Page.stopScreencast');
   }
 
-  private async startSession(page: Page): Promise<void> {
-    const pageSession = await this.getPageSession(page);
+  private async _startSession(page: Page): Promise<void> {
+    const pageSession = await this._getPageSession(page);
     if (!pageSession) {
       return;
     }
-    await this.stopScreenCast();
-    this.sessionsStack.push(pageSession);
-    this.handleScreenCastFrame(pageSession);
-    await this.startScreenCast(true);
+    await this._stopScreenCast();
+    this._sessionsStack.push(pageSession);
+    this._handleScreenCastFrame(pageSession);
+    await this._startScreenCast(true);
   }
 
-  private async handleScreenCastFrame(session) {
-    this.isFrameAckReceived = new Promise((resolve) => {
+  private async _handleScreenCastFrame(session) {
+    this._isFrameAckReceived = new Promise((resolve) => {
       session.on(
         'Page.screencastFrame',
         async ({ metadata, data, sessionId }) => {
-          if (!metadata.timestamp || this.isStreamingEnded) {
+          if (!metadata.timestamp || this._isStreamingEnded) {
             return resolve();
           }
 
@@ -123,44 +159,8 @@ export class pageVideoStreamCollector extends EventEmitter {
     });
   }
 
-  private async endSession(): Promise<void> {
-    this.sessionsStack.pop();
-    await this.startScreenCast();
-  }
-
-  public async start(): Promise<void> {
-    await this.startSession(this.page);
-    this.page.once('close', async () => await this.endSession());
-
-    if (this.shouldFollowPopupWindow) {
-      this.addListenerOnTabOpens(this.page);
-    }
-  }
-
-  public async stop(): Promise<boolean> {
-    if (this.isStreamingEnded) {
-      return this.isStreamingEnded;
-    }
-
-    if (this.shouldFollowPopupWindow) {
-      this.removeListenerOnTabClose(this.page);
-    }
-
-    await Promise.race([
-      this.isFrameAckReceived,
-      new Promise((resolve) => setTimeout(resolve, 1000)),
-    ]);
-
-    this.isStreamingEnded = true;
-
-    try {
-      for (const currentSession of this.sessionsStack) {
-        await currentSession.detach();
-      }
-    } catch (e) {
-      console.warn('Error detaching session', e.message);
-    }
-
-    return true;
+  private async _endSession(): Promise<void> {
+    this._sessionsStack.pop();
+    await this._startScreenCast();
   }
 }
