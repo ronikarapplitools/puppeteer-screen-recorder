@@ -4,9 +4,12 @@ import { extname } from 'path';
 import { PassThrough, Writable } from 'stream';
 
 import ffmpeg, { setFfmpegPath } from 'fluent-ffmpeg';
+import sharp from 'sharp'
+
 
 import {
   pageScreenFrame,
+  RawFrame,
   SupportedFileFormats,
   VIDEO_WRITE_STATUS,
   VideoOptions,
@@ -228,8 +231,10 @@ export default class PageVideoStreamWriter extends EventEmitter {
     return i + 1;
   }
 
-  public insert(frame: pageScreenFrame): void {
-    // reduce the queue into half when it is full
+   public async insert({data, metadata}: RawFrame): Promise<void> {
+     const frame = await this.createPageScreenFrame({data,metadata})
+     
+     // reduce the queue into half when it is full
     if (this.screenCastFrames.length === this.screenLimit) {
       const numberOfFramesToSplice = Math.floor(this.screenLimit / 2);
       const framesToProcess = this.screenCastFrames.splice(
@@ -266,6 +271,35 @@ export default class PageVideoStreamWriter extends EventEmitter {
     processedFrames.forEach(({ blob, duration }) => {
       this.write(blob, duration);
     });
+  }
+
+  private async createPageScreenFrame({data, metadata}: RawFrame){
+    let blob
+    const {deviceHeight, deviceWidth, timestamp} = metadata;
+
+    if (this.options.saveFrameSize){
+      const image = sharp(Buffer.from(data, 'base64'));
+      if (deviceWidth && deviceHeight){
+        image.resize({ width:metadata.deviceWidth, height:metadata.deviceHeight})
+        .extract({top:0, left:0, height: Math.min(this.options.videoFrame.height, deviceHeight), width: Math.min(this.options.videoFrame.width, deviceWidth)})
+        .extend({
+          top: 0,
+          bottom: Math.max(this.options.videoFrame.height - deviceHeight,0),
+          left: 0,
+          right: Math.max(this.options.videoFrame.width - deviceWidth ,0),
+          background: this.options.backgroundColor
+         })
+      }
+      
+      blob = await image.toFormat('jpeg').toBuffer()
+    }else{
+      blob = Buffer.from(data, 'base64')
+    }
+
+    return {
+      timestamp,
+      blob
+    }
   }
 
   public write(data: Buffer, durationSeconds = 1): void {

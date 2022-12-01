@@ -1,7 +1,6 @@
 import { EventEmitter } from 'events';
 
 import { CDPSession, Page } from 'puppeteer';
-import sharp from 'sharp'
 
 import { PuppeteerScreenRecorderOptions } from './pageVideoStreamTypes';
 
@@ -102,37 +101,13 @@ export class pageVideoStreamCollector extends EventEmitter {
             return resolve();
           }
 
-          let blob
-          
-          if (this.options.saveFrameSize){
-            const image = sharp(Buffer.from(data, 'base64'))
-
-            if (metadata.deviceWidth && metadata.deviceHeight){
-              image.resize({ width:metadata.deviceWidth, height:metadata.deviceHeight})
-              .extract({top:0, left:0, height: Math.min(this.options.videoFrame.height, metadata.deviceHeight), width: Math.min(this.options.videoFrame.width, metadata.deviceWidth)})
-              .extend({
-                top: 0,
-                bottom: Math.max(this.options.videoFrame.height - metadata.deviceHeight,0),
-                left: 0,
-                right: Math.max(this.options.videoFrame.width - metadata.deviceWidth ,0),
-                background: this.options.backgroundColor//{ r: 0, g: 0, b: 0, alpha: 0 }
-               })
-            }
-            
-            if (this.options.saveFrameSize){
-              blob = await image.toFormat('jpeg').toBuffer()
-            }
-          }else{
-            blob = Buffer.from(data, 'base64')
-          }
-          
           const ackPromise = session.send('Page.screencastFrameAck', {
             sessionId: sessionId,
           });
 
           this.emit('pageScreenFrame', {
-            blob,
-            timestamp: metadata.timestamp,
+            data,
+            metadata
           });
 
           try {

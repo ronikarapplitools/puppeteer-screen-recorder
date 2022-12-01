@@ -13,6 +13,12 @@ export enum VIDEO_WRITE_STATUS {
  * @ignore
  * @type PageScreen
  */
+
+ export type RawFrame = {
+  readonly metadata: {timestamp: number, deviceWidth?: number, deviceHeight?: number};
+  readonly data: string
+};
+
 export type pageScreenFrame = {
   readonly blob: Buffer;
   readonly timestamp: number;
