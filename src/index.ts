@@ -1,2 +1,2 @@
-export * from './lib/pageVideoStreamTypes';
+export * from './lib/PageVideoStreamTypes';
 export * from './lib/PuppeteerScreenRecorder';

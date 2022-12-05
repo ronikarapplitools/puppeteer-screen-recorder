@@ -4,9 +4,9 @@ import { Writable } from 'stream';
 
 import { Page } from 'puppeteer';
 
-import { pageVideoStreamCollector } from './pageVideoStreamCollector';
-import { PuppeteerScreenRecorderOptions } from './pageVideoStreamTypes';
-import PageVideoStreamWriter from './pageVideoStreamWriter';
+import { pageVideoStreamCollector } from './PageVideoStreamCollector';
+import { Logger, PuppeteerScreenRecorderOptions } from './PageVideoStreamTypes';
+import PageVideoStreamWriter from './PageVideoStreamWriter';
 
 /**
  * @ignore
@@ -48,14 +48,16 @@ export class PuppeteerScreenRecorder {
   private _streamReader: pageVideoStreamCollector;
   private _streamWriter: PageVideoStreamWriter;
   private _isScreenCaptureEnded: boolean | null = null;
+  private _logger: Logger
 
-  constructor(page: Page, options = {}) {
+  constructor(page: Page, options = {}, logger?: Logger) {
+    this._logger = logger || console;
     this._options = Object.assign(
       {},
       defaultPuppeteerScreenRecorderOptions,
       options
     );
-    this._streamReader = new pageVideoStreamCollector(page, this._options);
+    this._streamReader = new pageVideoStreamCollector(page, this._options, this._logger);
     this._page = page;
   }
 
@@ -90,7 +92,7 @@ export class PuppeteerScreenRecorder {
   public async start(savePath: string): Promise<PuppeteerScreenRecorder> {
     await this._ensureDirectoryExist(dirname(savePath));
 
-    this._streamWriter = new PageVideoStreamWriter(savePath, this._options);
+    this._streamWriter = new PageVideoStreamWriter(savePath, this._options, this._logger);
     return this._startStreamReader();
   }
 
@@ -107,7 +109,7 @@ export class PuppeteerScreenRecorder {
    * ```
    */
   public async startStream(stream: Writable): Promise<PuppeteerScreenRecorder> {
-    this._streamWriter = new PageVideoStreamWriter(stream, this._options);
+    this._streamWriter = new PageVideoStreamWriter(stream, this._options, this._logger);
     return this._startStreamReader();
   }
 

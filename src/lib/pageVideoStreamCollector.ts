@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 
 import { CDPSession, Page } from 'puppeteer';
 
-import { PuppeteerScreenRecorderOptions } from './pageVideoStreamTypes';
+import { Logger, PuppeteerScreenRecorderOptions } from './PageVideoStreamTypes';
 
 /**
  * @ignore
@@ -12,13 +12,15 @@ export class pageVideoStreamCollector extends EventEmitter {
   private _options: PuppeteerScreenRecorderOptions;
   private _sessionsStack: [CDPSession?] = [];
   private _isStreamingEnded = false;
+  private readonly _logger: Logger
 
   private _isFrameAckReceived: Promise<void>;
 
-  constructor(page: Page, options: PuppeteerScreenRecorderOptions) {
+  constructor(page: Page, options: PuppeteerScreenRecorderOptions, logger: Logger) {
     super();
     this._page = page;
     this._options = options;
+    this._logger = logger
   }
 
   private get _shouldFollowPopupWindow(): boolean {
@@ -102,7 +104,11 @@ export class pageVideoStreamCollector extends EventEmitter {
         format: this._options.format || 'jpeg',
         quality: quality,
       });
+
+      this._logger.info({action: 'start-screencast'})
     } catch (e) {
+      this._logger.info({action: 'start-screencast', error: e.stack})
+
       if (shouldDeleteSessionOnFailure) {
         this._endSession();
       }

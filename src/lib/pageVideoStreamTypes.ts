@@ -169,3 +169,9 @@ export enum SupportedFileFormats {
   AVI = 'avi',
   WEBM = 'webm',
 }
+
+export interface Logger {
+  info: (obj: unknown) => void
+  warn: (obj:unknown) => void
+  error: (obj:unknown) => void
+}

@@ -4,16 +4,16 @@ import { extname } from 'path';
 import { PassThrough, Writable } from 'stream';
 
 import ffmpeg, { setFfmpegPath } from 'fluent-ffmpeg';
-import sharp from 'sharp'
-
 
 import {
+  Logger,
   PageScreenFrame,
   RawFrame,
   SupportedFileFormats,
   VIDEO_WRITE_STATUS,
   VideoOptions,
-} from './pageVideoStreamTypes';
+} from './PageVideoStreamTypes';
+import FrameImageProcesser from "./frameImageProcesser"
 
 /**
  * @ignore
@@ -35,12 +35,17 @@ export default class PageVideoStreamWriter extends EventEmitter {
 
   private _status = VIDEO_WRITE_STATUS.NOT_STARTED;
   private _options: VideoOptions;
-
+  
+  private _processFramesPromise = Promise.resolve()
+  
   private _videoMediatorStream: PassThrough = new PassThrough();
   private _writerPromise: Promise<boolean>;
 
-  constructor(destinationSource: string | Writable, options?: VideoOptions) {
+  private readonly _logger: Logger
+
+  constructor(destinationSource: string | Writable, options: VideoOptions, logger: Logger) {
     super();
+    this._logger = logger
 
     if (options) {
       this._options = options;
@@ -69,26 +74,26 @@ export default class PageVideoStreamWriter extends EventEmitter {
       : { activation: true, color: autopad.color };
   }
 
-  public async insert({data, metadata}: RawFrame): Promise<void> {
-    const frame = await this._createPageScreenFrame({data,metadata})
-
-     // reduce the queue into half when it is full
-    if (this._screenCastFrames.length === this._screenLimit) {
-      const numberOfFramesToSplice = Math.floor(this._screenLimit / 2);
-      const framesToProcess = this._screenCastFrames.splice(
-        0,
-        numberOfFramesToSplice
-      );
-      this._processFrameBeforeWrite(framesToProcess, this._screenCastFrames[0].timestamp);
-    }
-
-    const insertionIndex = this._findSlot(frame.timestamp);
-
-    if (insertionIndex === this._screenCastFrames.length) {
-      this._screenCastFrames.push(frame);
-    } else {
-      this._screenCastFrames.splice(insertionIndex, 0, frame);
-    }
+  public insert({data, metadata}: RawFrame): void {
+    const frame = {data, metadata , timestamp:metadata.timestamp}
+  
+       // reduce the queue into half when it is full
+      if (this._screenCastFrames.length === this._screenLimit) {
+        const numberOfFramesToSplice = Math.floor(this._screenLimit / 2);
+        const framesToProcess = this._screenCastFrames.splice(
+          0,
+          numberOfFramesToSplice
+        );
+        this._processFrameAndWrite(framesToProcess, this._screenCastFrames[0].timestamp);
+      }
+  
+      const insertionIndex = this._findSlot(frame.timestamp);
+  
+      if (insertionIndex === this._screenCastFrames.length) {
+        this._screenCastFrames.push(frame);
+      } else {
+        this._screenCastFrames.splice(insertionIndex, 0, frame);
+      }
   }
 
   public write(data: Buffer, durationSeconds = 1): void {
@@ -204,6 +209,7 @@ export default class PageVideoStreamWriter extends EventEmitter {
         })
         .on('end', () => {
           writableStream.end();
+          this._logger.info({action: 'ffmpeg-video-stream-ended'})
           resolve(true);
         });
 
@@ -290,33 +296,55 @@ export default class PageVideoStreamWriter extends EventEmitter {
     });
   }
 
-  private _processFrameBeforeWrite(frames: PageScreenFrame[], chunckEndTime: number): void {
-    const processedFrames = this._trimFrame(frames, chunckEndTime);
+  private _processFrameAndWrite(frames: any[], chunckEndTime: number): void {
+    this._processFramesPromise = this._processFramesPromise.then(async ()=> {
+      // Todo: fix performance log
+      const start = Date.now()
 
-    processedFrames.forEach(({ blob, duration }) => {
-      this.write(blob, duration);
-    });
+      const f = await Promise.all(frames.map(frame => this._createPageScreenFrame(frame)))
+      const processedFrames = this._trimFrame(f, chunckEndTime);
+
+      const afterProcessChunkTime  = Date.now()
+      
+      processedFrames.forEach(({ blob, duration }) => {
+        this.write(blob, duration);
+      });
+
+      this._logger.info({
+        action: 'process-chunk-and-write',
+        videoFrame: this._options.videoFrame,
+        performance:{
+          procees: afterProcessChunkTime - start,
+          write: Date.now() - afterProcessChunkTime
+        }
+      })
+    })
   }
 
   private async _createPageScreenFrame({data, metadata}: RawFrame){
     let blob
     const {deviceHeight, deviceWidth, timestamp} = metadata;
 
-    if (this._options.saveFrameSize){
-      const image = sharp(Buffer.from(data, 'base64'));
-      if (deviceWidth && deviceHeight){
-        image.resize({ width:metadata.deviceWidth, height:metadata.deviceHeight})
-        .extract({top:0, left:0, height: Math.min(this._options.videoFrame.height, deviceHeight), width: Math.min(this._options.videoFrame.width, deviceWidth)})
-        .extend({
-          top: 0,
-          bottom: Math.max(this._options.videoFrame.height - deviceHeight,0),
-          left: 0,
-          right: Math.max(this._options.videoFrame.width - deviceWidth ,0),
-          background: this._options.backgroundColor
-         })
-      }
+    if (this._options.saveFrameSize && deviceWidth && deviceHeight){
+      const imageProcesser = new FrameImageProcesser({
+        buffer: Buffer.from(data, 'base64'),
+        size: { width:metadata.deviceWidth, height:metadata.deviceHeight}
+      })
       
-      blob = await image.toFormat('jpeg').toBuffer()
+      const start = Date.now()
+      
+      blob = await imageProcesser.process({width: this._options.videoFrame.width, height: this._options.videoFrame.height, backgroundColor: this._options.backgroundColor})
+      
+      this._logger.info({
+        action: 'process-frame',
+        videoFrame: this._options.videoFrame,
+        metadata,
+        performance:{
+          procees: Date.now() - start,
+          
+        }
+      })
+
     }else{
       blob = Buffer.from(data, 'base64')
     }
@@ -328,7 +356,7 @@ export default class PageVideoStreamWriter extends EventEmitter {
   }
 
   private _drainFrames(stoppedTime: number): void {
-    this._processFrameBeforeWrite(this._screenCastFrames, stoppedTime);
+    this._processFrameAndWrite(this._screenCastFrames, stoppedTime);
     this._screenCastFrames = [];
   }
 }
